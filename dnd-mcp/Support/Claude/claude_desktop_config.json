@@ -2,7 +2,9 @@
   "mcpServers": {
     "dnd": {
       "command": "python3",
-      "args": ["/Users/ryanmerrill/Sites/dnd-mcp/dnd-mcp/simple_dnd_server.py"]
+      "args": [
+        "/Users/ryanmerrill/Sites/dnd-mcp/dnd-mcp/dnd_mcp_server_modular.py"
+      ]
     }
   }
 }
