@@ -3,7 +3,7 @@
     "dnd": {
       "command": "python3",
       "args": [
-        "/Users/ryanmerrill/Sites/dnd-mcp/dnd-mcp/dnd_mcp_server_modular.py"
+        "/Users/ryanmerrill/Sites/dnd-mcp/dnd-mcp/dnd_mcp_server_fastmcp.py"
       ]
     }
   }
