@@ -8,316 +8,574 @@ import urllib.parse
 import mcp.types as types
 from api_helpers import API_BASE_URL
 from formatters import format_monster_data, format_spell_data, format_class_data
+import requests
+import logging
+from typing import List, Dict, Any, Optional
+from cache import APICache
+import formatters
+import resources
+
+logger = logging.getLogger(__name__)
+
+# Base URL for the D&D 5e API
+BASE_URL = "https://www.dnd5eapi.co/api"
 
 
-def register_tools(app):
-    """Register tool handlers with the app using the decorator pattern."""
-    print("Defining tools with decorators...", file=sys.stderr)
+def register_tools(app, cache: APICache):
+    """Register D&D API tools with the FastMCP app.
 
-    # Define the query_monster function
-    async def query_monster_handler(name: str) -> str:
-        """Get information about a D&D monster.
+    Args:
+        app: The FastMCP app instance
+        cache: The shared API cache
+    """
+    print("Registering D&D API tools...", file=sys.stderr)
+
+    @app.tool()
+    def search_equipment_by_cost(max_cost: float, cost_unit: str = "gp") -> Dict[str, Any]:
+        """Search equipment by maximum cost.
 
         Args:
-            name: The name of the monster (e.g., goblin, dragon)
-        """
-        print(f"Searching for monster: {name}", file=sys.stderr)
-        try:
-            monster_name = name.lower()
-            if not monster_name:
-                return "Please provide a monster name."
+            max_cost: Maximum cost value
+            cost_unit: Cost unit (gp, sp, cp)
 
-            # Special monsters dictionary
-            special_monsters = {
-                "beholder": "beholder-zombie",  # Beholder is actually "beholder-zombie" in the API
-                "dragon": "adult-black-dragon",  # Default dragon if just "dragon" is specified
-                "devil": "horned-devil",        # Default devil
-                "demon": "balor",               # Default demon
-                "giant": "stone-giant",         # Default giant
-                "lich": "lich",                 # Lich is actually in the API
-                "vampire": "vampire",           # Vampire is in the API
-                "zombie": "zombie"              # Zombie is in the API
+        Returns:
+            Equipment items within the cost range
+        """
+        logger.debug(f"Searching equipment by cost: {max_cost} {cost_unit}")
+
+        # Get equipment list (from cache if available)
+        equipment_list = _get_category_items("equipment", cache)
+        if "error" in equipment_list:
+            return equipment_list
+
+        # Filter equipment by cost
+        results = []
+        for item in equipment_list.get("items", []):
+            # Get detailed item info (from cache if available)
+            item_index = item["index"]
+            item_details = _get_item_details("equipment", item_index, cache)
+            if "error" in item_details:
+                continue
+
+            # Check if item has cost and is within budget
+            if "cost" in item_details:
+                cost = item_details["cost"]
+                # Convert cost to requested unit for comparison
+                converted_cost = _convert_currency(
+                    cost["quantity"], cost["unit"], cost_unit)
+                if converted_cost <= max_cost:
+                    results.append({
+                        "name": item_details["name"],
+                        "cost": f"{cost['quantity']} {cost['unit']}",
+                        "description": _get_description(item_details),
+                        "category": item_details.get("equipment_category", {}).get("name", "Unknown"),
+                        "uri": f"resource://dnd/item/equipment/{item_index}"
+                    })
+
+        return {
+            "query": f"Equipment costing {max_cost} {cost_unit} or less",
+            "items": results,
+            "count": len(results)
+        }
+
+    @app.tool()
+    def filter_spells_by_level(min_level: int = 0, max_level: int = 9, school: str = None) -> Dict[str, Any]:
+        """Filter spells by level range and optionally by school.
+
+        Args:
+            min_level: Minimum spell level (0-9)
+            max_level: Maximum spell level (0-9)
+            school: Magic school (optional)
+
+        Returns:
+            Spells within the level range and school
+        """
+        logger.debug(
+            f"Filtering spells by level: {min_level}-{max_level}, school: {school}")
+
+        # Validate input
+        if min_level < 0 or max_level > 9 or min_level > max_level:
+            return {"error": "Invalid level range. Must be between 0 and 9."}
+
+        # Get spells list (from cache if available)
+        spells_list = _get_category_items("spells", cache)
+        if "error" in spells_list:
+            return spells_list
+
+        # Filter spells by level and school
+        results = []
+        for item in spells_list.get("items", []):
+            # Get detailed spell info (from cache if available)
+            item_index = item["index"]
+            spell_details = _get_item_details("spells", item_index, cache)
+            if "error" in spell_details:
+                continue
+
+            # Check if spell level is within range
+            spell_level = spell_details.get("level", 0)
+            if min_level <= spell_level <= max_level:
+                # Check school if specified
+                if school:
+                    spell_school = spell_details.get(
+                        "school", {}).get("name", "").lower()
+                    if school.lower() not in spell_school:
+                        continue
+
+                results.append({
+                    "name": spell_details["name"],
+                    "level": spell_level,
+                    "school": spell_details.get("school", {}).get("name", "Unknown"),
+                    "casting_time": spell_details.get("casting_time", "Unknown"),
+                    "description": _get_description(spell_details),
+                    "uri": f"resource://dnd/item/spells/{item_index}"
+                })
+
+        # Sort results by level and name
+        results.sort(key=lambda x: (x["level"], x["name"]))
+
+        return {
+            "query": f"Spells of level {min_level}-{max_level}" + (f" in school {school}" if school else ""),
+            "items": results,
+            "count": len(results)
+        }
+
+    @app.tool()
+    def find_monsters_by_challenge_rating(min_cr: float = 0, max_cr: float = 30) -> Dict[str, Any]:
+        """Find monsters within a challenge rating range.
+
+        Args:
+            min_cr: Minimum challenge rating
+            max_cr: Maximum challenge rating
+
+        Returns:
+            Monsters within the CR range
+        """
+        logger.debug(f"Finding monsters by CR: {min_cr}-{max_cr}")
+
+        # Get monsters list (from cache if available)
+        monsters_list = _get_category_items("monsters", cache)
+        if "error" in monsters_list:
+            return monsters_list
+
+        # Filter monsters by CR
+        results = []
+        for item in monsters_list.get("items", []):
+            # Get detailed monster info (from cache if available)
+            item_index = item["index"]
+            monster_details = _get_item_details("monsters", item_index, cache)
+            if "error" in monster_details:
+                continue
+
+            # Check if monster CR is within range
+            monster_cr = float(monster_details.get("challenge_rating", 0))
+            if min_cr <= monster_cr <= max_cr:
+                results.append({
+                    "name": monster_details["name"],
+                    "challenge_rating": monster_cr,
+                    "type": monster_details.get("type", "Unknown"),
+                    "size": monster_details.get("size", "Unknown"),
+                    "alignment": monster_details.get("alignment", "Unknown"),
+                    "hit_points": monster_details.get("hit_points", 0),
+                    "armor_class": monster_details.get("armor_class", [{"value": 0}])[0].get("value", 0),
+                    "uri": f"resource://dnd/item/monsters/{item_index}"
+                })
+
+        # Sort results by CR and name
+        results.sort(key=lambda x: (x["challenge_rating"], x["name"]))
+
+        return {
+            "query": f"Monsters with CR {min_cr}-{max_cr}",
+            "items": results,
+            "count": len(results)
+        }
+
+    @app.tool()
+    def get_class_starting_equipment(class_name: str) -> Dict[str, Any]:
+        """Get starting equipment for a character class.
+
+        Args:
+            class_name: Name of the character class
+
+        Returns:
+            Starting equipment for the class
+        """
+        logger.debug(f"Getting starting equipment for class: {class_name}")
+
+        # Normalize class name
+        class_name = class_name.lower()
+
+        # Get class details (from cache if available)
+        class_details = _get_item_details("classes", class_name, cache)
+        if "error" in class_details:
+            return {"error": f"Class '{class_name}' not found"}
+
+        # Extract starting equipment
+        starting_equipment = []
+        for item in class_details.get("starting_equipment", []):
+            equipment = item.get("equipment", {})
+            quantity = item.get("quantity", 1)
+            starting_equipment.append({
+                "name": equipment.get("name", "Unknown"),
+                "quantity": quantity
+            })
+
+        # Extract starting equipment options
+        equipment_options = []
+        for option_set in class_details.get("starting_equipment_options", []):
+            desc = option_set.get("desc", "Choose one option")
+            choices = []
+
+            for option in option_set.get("from", {}).get("options", []):
+                if "item" in option:
+                    item = option.get("item", {})
+                    choices.append({
+                        "name": item.get("name", "Unknown"),
+                        "quantity": option.get("quantity", 1)
+                    })
+
+            equipment_options.append({
+                "description": desc,
+                "choices": choices
+            })
+
+        return {
+            "class": class_details.get("name", class_name),
+            "starting_equipment": starting_equipment,
+            "equipment_options": equipment_options
+        }
+
+    @app.tool()
+    def search_all_categories(query: str) -> Dict[str, Any]:
+        """Search across all D&D categories for a term.
+
+        Args:
+            query: Search term
+
+        Returns:
+            Matching items across categories
+        """
+        logger.debug(f"Searching all categories for: {query}")
+
+        # Get categories (from cache if available)
+        categories_data = cache.get("dnd_categories")
+        if not categories_data:
+            try:
+                response = requests.get(f"{BASE_URL}/")
+                if response.status_code != 200:
+                    return {"error": f"Failed to fetch categories: {response.status_code}"}
+
+                data = response.json()
+                categories = list(data.keys())
+
+            except Exception as e:
+                logger.exception(f"Error fetching categories: {e}")
+                return {"error": f"Failed to fetch categories: {str(e)}"}
+        else:
+            categories = [cat["name"]
+                          for cat in categories_data.get("categories", [])]
+
+        # Prepare search query
+        query_tokens = query.lower().split()
+
+        # Define category priorities for certain query types
+        category_priorities = {}
+
+        # Check for magic item related queries
+        magic_item_keywords = ["magic", "magical", "item",
+                               "items", "wand", "staff", "rod", "wondrous"]
+        if any(keyword in query_tokens for keyword in magic_item_keywords):
+            category_priorities["magic-items"] = 10
+            category_priorities["equipment"] = 5
+
+        # Check for spell related queries
+        spell_keywords = ["spell", "spells", "cast", "casting",
+                          "caster", "magic", "wizard", "sorcerer", "warlock", "cleric"]
+        if any(keyword in query_tokens for keyword in spell_keywords):
+            category_priorities["spells"] = 10
+            category_priorities["classes"] = 5
+
+        # Check for monster related queries
+        monster_keywords = ["monster", "creature", "beast",
+                            "dragon", "undead", "fiend", "demon", "devil"]
+        if any(keyword in query_tokens for keyword in monster_keywords):
+            category_priorities["monsters"] = 10
+
+        # Search each category
+        results = {}
+        total_count = 0
+        all_matches = []
+
+        for category in categories:
+            # Skip rule-related categories for efficiency
+            if category in ["rule-sections", "rules"]:
+                continue
+
+            # Get category items (from cache if available)
+            category_data = _get_category_items(category, cache)
+            if "error" in category_data:
+                continue
+
+            # Search for matching items with relevance scoring
+            matching_items = []
+
+            for item in category_data.get("items", []):
+                item_name = item["name"].lower()
+                item_index = item.get("index", "").lower()
+
+                # Get item details for more comprehensive search
+                item_details = None
+                if any(token in item_name or token in item_index for token in query_tokens):
+                    # Only fetch details if there's a potential match to avoid unnecessary API calls
+                    item_details = _get_item_details(
+                        category, item["index"], cache)
+
+                # Calculate relevance score
+                score = 0
+
+                # Exact match in name or index
+                if query.lower() == item_name or query.lower() == item_index:
+                    score += 100
+
+                # Partial matches in name or index
+                for token in query_tokens:
+                    if token in item_name:
+                        score += 20
+                    if token in item_index:
+                        score += 15
+
+                # Check if name contains all tokens
+                if all(token in item_name for token in query_tokens):
+                    score += 50
+
+                # Check if name starts with any token
+                if any(item_name.startswith(token) for token in query_tokens):
+                    score += 10
+
+                # Search in description and other fields if we have details
+                if item_details and isinstance(item_details, dict) and not item_details.get("error"):
+                    # Search in description
+                    desc = ""
+                    if isinstance(item_details.get("desc"), list):
+                        desc = " ".join(item_details.get("desc", [])).lower()
+                    elif isinstance(item_details.get("desc"), str):
+                        desc = item_details.get("desc", "").lower()
+
+                    for token in query_tokens:
+                        if token in desc:
+                            score += 5
+
+                    # Search in other relevant fields based on category
+                    if category == "magic-items" or category == "equipment":
+                        # Check equipment category
+                        eq_category = item_details.get(
+                            "equipment_category", {}).get("name", "").lower()
+                        for token in query_tokens:
+                            if token in eq_category:
+                                score += 10
+
+                        # Check rarity for magic items
+                        rarity = item_details.get(
+                            "rarity", {}).get("name", "").lower()
+                        for token in query_tokens:
+                            if token in rarity:
+                                score += 10
+
+                    elif category == "spells":
+                        # Check spell school
+                        school = item_details.get(
+                            "school", {}).get("name", "").lower()
+                        for token in query_tokens:
+                            if token in school:
+                                score += 10
+
+                        # Check classes that can use this spell
+                        classes = [c.get("name", "").lower()
+                                   for c in item_details.get("classes", [])]
+                        for token in query_tokens:
+                            if any(token in c for c in classes):
+                                score += 15
+
+                # Apply category priority boost
+                if category in category_priorities:
+                    score += category_priorities[category]
+
+                # Add to matches if score is above threshold
+                if score > 0:
+                    matching_items.append({
+                        **item,
+                        "score": score
+                    })
+
+            # Sort by relevance score
+            matching_items.sort(key=lambda x: x["score"], reverse=True)
+
+            if matching_items:
+                # Add category to results
+                results[category] = {
+                    # Limit to 5 items per category
+                    "items": matching_items[:5],
+                    "count": len(matching_items)
+                }
+                total_count += len(matching_items)
+
+                # Add to all matches for cross-category sorting
+                for item in matching_items:
+                    all_matches.append({
+                        "category": category,
+                        "item": item
+                    })
+
+        # Sort all matches by score for top overall results
+        all_matches.sort(key=lambda x: x["item"]["score"], reverse=True)
+        top_results = all_matches[:5] if all_matches else []
+
+        return {
+            "query": query,
+            "results": results,
+            "total_count": total_count,
+            "top_results": [
+                {
+                    "category": match["category"],
+                    "name": match["item"]["name"],
+                    "index": match["item"]["index"],
+                    "score": match["item"]["score"]
+                } for match in top_results
+            ]
+        }
+
+    @app.tool("compare_knowledge")
+    def compare_knowledge(category: str, index: str) -> Dict[str, Any]:
+        """Compare D&D 5e API data with Claude's internal knowledge.
+
+        This tool fetches data from the D&D 5e API and also provides Claude's internal knowledge
+        about the same entity, allowing you to compare the two sources.
+
+        Args:
+            category: The D&D API category (e.g., 'spells', 'equipment', 'monsters')
+            index: The specific item's index identifier
+
+        Returns:
+            A dictionary containing both the API data and Claude's internal knowledge
+        """
+        logger.debug(f"Comparing knowledge for {category}/{index}")
+
+        # Get data from the D&D 5e API using the helper function
+        api_data = _get_item_details(category, index, cache)
+
+        # Add source attribution
+        if "error" not in api_data:
+            api_data["source"] = "D&D 5e API (www.dnd5eapi.co)"
+
+        # Create a placeholder for Claude's internal knowledge
+        # This will be filled in by Claude during response generation
+        claude_knowledge = {
+            "note": "This section will be filled with Claude's internal knowledge during response generation",
+            "source": "Claude's training data (no API call)"
+        }
+
+        return {
+            "api_data": api_data,
+            "claude_knowledge": claude_knowledge,
+            "comparison_note": "Compare these two sources to see differences between API data and Claude's knowledge"
+        }
+
+    # Helper functions
+    def _get_category_items(category: str, cache: APICache) -> Dict[str, Any]:
+        """Get all items in a category, using cache if available."""
+        cache_key = f"dnd_items_{category}"
+        cached_data = cache.get(cache_key)
+
+        if cached_data:
+            return cached_data
+
+        try:
+            response = requests.get(f"{BASE_URL}/{category}")
+            if response.status_code != 200:
+                return {"error": f"Category '{category}' not found or API request failed"}
+
+            data = response.json()
+
+            # Transform to resource format
+            items = []
+            for item in data.get("results", []):
+                items.append({
+                    "name": item["name"],
+                    "index": item["index"],
+                    "description": f"Details about {item['name']}",
+                    "uri": f"resource://dnd/item/{category}/{item['index']}"
+                })
+
+            result = {
+                "category": category,
+                "items": items,
+                "count": len(items)
             }
 
-            # Check if we have a special case
-            if monster_name in special_monsters:
-                print(
-                    f"Special monster case: {monster_name} -> {special_monsters[monster_name]}", file=sys.stderr)
-                monster_index = special_monsters[monster_name]
-            else:
-                monster_index = monster_name.replace(" ", "-")
+            # Cache the result
+            cache.set(cache_key, result)
+            return result
 
-            # First try direct access by index (for exact matches)
-            try:
-                # Try direct access first
-                direct_url = f"{API_BASE_URL}/monsters/{monster_index}"
-                print(f"Trying direct access: {direct_url}", file=sys.stderr)
-
-                with urllib.request.urlopen(direct_url) as response:
-                    if response.status == 200:
-                        print(
-                            f"Direct access successful for {monster_index}", file=sys.stderr)
-                        monster_data = json.loads(response.read())
-                        formatted_data = format_monster_data(monster_data)
-                        return formatted_data
-            except urllib.error.HTTPError as e:
-                if e.code == 404:
-                    print(
-                        f"Monster not found by direct index: {monster_index} (404)", file=sys.stderr)
-                    # Continue to search
-                else:
-                    print(f"HTTP error: {e}", file=sys.stderr)
-                    return f"Error accessing the D&D API: {str(e)}"
-            except Exception as e:
-                print(f"Error in direct access: {e}", file=sys.stderr)
-                traceback.print_exc(file=sys.stderr)
-                # Continue to search
-
-            # If direct access fails, try searching by name
-            try:
-                # Use the monster list endpoint with name filtering
-                search_url = f"{API_BASE_URL}/monsters?name={urllib.parse.quote(monster_name)}"
-                print(
-                    f"Searching monsters with URL: {search_url}", file=sys.stderr)
-
-                with urllib.request.urlopen(search_url) as response:
-                    if response.status == 200:
-                        search_results = json.loads(response.read())
-                        print(
-                            f"Search results count: {search_results.get('count', 0)}", file=sys.stderr)
-
-                        if search_results.get("count", 0) == 0:
-                            # Try a more general search by removing hyphens and using partial matching
-                            general_name = monster_name.replace(
-                                "-", " ").split()[0]  # Get first word
-                            if general_name != monster_name:
-                                print(
-                                    f"Trying more general search with: {general_name}", file=sys.stderr)
-                                general_url = f"{API_BASE_URL}/monsters?name={urllib.parse.quote(general_name)}"
-
-                                with urllib.request.urlopen(general_url) as general_response:
-                                    if general_response.status == 200:
-                                        general_results = json.loads(
-                                            general_response.read())
-                                        print(
-                                            f"General search results count: {general_results.get('count', 0)}", file=sys.stderr)
-
-                                        if general_results.get("count", 0) > 0:
-                                            # Found some results with the more general search
-                                            monsters_list = "\n".join(
-                                                [f"- {m['name']}" for m in general_results.get("results", [])])
-                                            return f"Found {general_results.get('count')} monsters related to '{monster_name}':\n\n{monsters_list}\n\nPlease specify a single monster name for detailed information."
-
-                            # Try searching with challenge rating if it's a number
-                            if monster_name.replace(".", "").isdigit():
-                                cr_search_url = f"{API_BASE_URL}/monsters?challenge_rating={monster_name}"
-                                print(
-                                    f"Searching by CR: {cr_search_url}", file=sys.stderr)
-
-                                with urllib.request.urlopen(cr_search_url) as cr_response:
-                                    if cr_response.status == 200:
-                                        cr_results = json.loads(
-                                            cr_response.read())
-                                        if cr_results.get("count", 0) > 0:
-                                            monsters_list = "\n".join(
-                                                [f"- {m['name']} (CR {monster_name})" for m in cr_results.get("results", [])])
-                                            return f"Found {cr_results.get('count')} monsters with Challenge Rating {monster_name}:\n\n{monsters_list}"
-
-                            # Try a full list search as a last resort
-                            print("Trying full monster list search",
-                                  file=sys.stderr)
-                            full_list_url = f"{API_BASE_URL}/monsters"
-                            with urllib.request.urlopen(full_list_url) as full_list_response:
-                                if full_list_response.status == 200:
-                                    full_list_results = json.loads(
-                                        full_list_response.read())
-                                    # Search for partial matches in the full list
-                                    matches = []
-                                    for m in full_list_results.get("results", []):
-                                        if monster_name in m.get("name", "").lower():
-                                            matches.append(m)
-
-                                    if matches:
-                                        print(
-                                            f"Found {len(matches)} partial matches in full list", file=sys.stderr)
-                                        monsters_list = "\n".join(
-                                            [f"- {m['name']}" for m in matches])
-                                        return f"Found {len(matches)} monsters related to '{monster_name}':\n\n{monsters_list}\n\nPlease specify a single monster name for detailed information."
-
-                            # Special case for common monsters that might not be in the SRD
-                            common_monsters = {
-                                "beholder": "The Beholder is an iconic D&D monster but is not included in the SRD API. It's a floating orb-like aberration with a large central eye and multiple eyestalks, each capable of casting different spell-like effects.",
-                                "mind flayer": "The Mind Flayer (Illithid) is an iconic D&D monster but is not included in the SRD API. It's a humanoid creature with an octopus-like head that feeds on the brains of sentient creatures.",
-                                "tarrasque": "The Tarrasque is an iconic D&D monster but is not included in the SRD API. It's a colossal monstrosity and one of the most powerful monsters in D&D, capable of destroying entire cities.",
-                                "displacer beast": "The Displacer Beast is an iconic D&D monster but is not included in the SRD API. It resembles a large panther with six legs and two tentacles sprouting from its shoulders, and has the magical ability to appear to be in a different location than it actually is."
-                            }
-
-                            if monster_name in common_monsters:
-                                return common_monsters[monster_name]
-
-                            return f"No monsters found matching '{monster_name}'. The D&D 5e SRD API only includes a subset of monsters from the Monster Manual."
-
-                        # If we have results, get the first one's details
-                        if search_results.get("count", 0) == 1:
-                            monster_url = search_results["results"][0]["url"].lstrip(
-                                "/api/")
-                            with urllib.request.urlopen(f"{API_BASE_URL}/{monster_url}") as monster_response:
-                                if monster_response.status == 200:
-                                    monster_data = json.loads(
-                                        monster_response.read())
-                                    formatted_data = format_monster_data(
-                                        monster_data)
-                                    return formatted_data
-                        else:
-                            # Multiple results - list them
-                            monsters_list = "\n".join(
-                                [f"- {m['name']}" for m in search_results.get("results", [])])
-                            return f"Found {search_results.get('count')} monsters matching '{monster_name}':\n\n{monsters_list}\n\nPlease specify a single monster name for detailed information."
-            except urllib.error.HTTPError as e:
-                print(f"HTTP error in monster search: {e}", file=sys.stderr)
-                traceback.print_exc(file=sys.stderr)
-                return f"Error searching the D&D API: {str(e)}"
-            except Exception as e:
-                print(f"Error in monster search: {e}", file=sys.stderr)
-                traceback.print_exc(file=sys.stderr)
-                return f"Error: {str(e)}"
-
-            return f"Could not find information about '{monster_name}'. The D&D 5e SRD API only includes a subset of monsters from the Monster Manual."
         except Exception as e:
-            print(f"Error in query_monster: {e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
-            return f"Error: {str(e)}"
+            logger.exception(f"Error fetching items for {category}: {e}")
+            return {"error": f"Failed to fetch items: {str(e)}"}
 
-    # Define the get_spell function
-    async def get_spell_handler(name: str) -> str:
-        """Get detailed information about a D&D spell.
+    def _get_item_details(category: str, index: str, cache: APICache) -> Dict[str, Any]:
+        """Get detailed information about a specific item, using cache if available."""
+        cache_key = f"dnd_item_{category}_{index}"
+        cached_data = cache.get(cache_key)
 
-        Args:
-            name: The name of the spell (e.g., fireball, magic missile)
-        """
-        print(f"Querying spell: {name}", file=sys.stderr)
+        if cached_data:
+            return cached_data
+
         try:
-            spell_name = name.lower().replace(" ", "-")
-            if not spell_name:
-                return "Please provide a spell name."
+            response = requests.get(f"{BASE_URL}/{category}/{index}")
+            if response.status_code != 200:
+                return {"error": f"Item '{index}' not found in category '{category}' or API request failed"}
 
-            try:
-                with urllib.request.urlopen(f"{API_BASE_URL}/spells/{spell_name}") as response:
-                    if response.status == 200:
-                        spell_data = json.loads(response.read())
-                        formatted_data = format_spell_data(spell_data)
-                        return formatted_data
-                    else:
-                        return f"Spell '{name}' not found."
-            except urllib.error.HTTPError as e:
-                if e.code == 404:
-                    # Try searching by name if direct access fails
-                    try:
-                        search_url = f"{API_BASE_URL}/spells?name={urllib.parse.quote(name)}"
-                        with urllib.request.urlopen(search_url) as search_response:
-                            if search_response.status == 200:
-                                search_results = json.loads(
-                                    search_response.read())
-                                if search_results.get("count", 0) > 0:
-                                    spell_url = search_results["results"][0]["url"].lstrip(
-                                        "/api/")
-                                    with urllib.request.urlopen(f"{API_BASE_URL}/{spell_url}") as spell_response:
-                                        if spell_response.status == 200:
-                                            spell_data = json.loads(
-                                                spell_response.read())
-                                            formatted_data = format_spell_data(
-                                                spell_data)
-                                            return formatted_data
-                                return f"No spells found matching '{name}'."
-                    except Exception as search_e:
-                        return f"Error searching for spell: {str(search_e)}"
-                return f"Error accessing spell information: {str(e)}"
-            except Exception as e:
-                return f"Error: {str(e)}"
+            data = response.json()
+
+            # Cache the result
+            cache.set(cache_key, data)
+            return data
+
         except Exception as e:
-            print(f"Error in get_spell: {e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
-            return f"Error: {str(e)}"
+            logger.exception(f"Error fetching item {category}/{index}: {e}")
+            return {"error": f"Failed to fetch item details: {str(e)}"}
 
-    # Define the get_class function
-    async def get_class_handler(name: str) -> str:
-        """Get information about a D&D character class.
+    def _convert_currency(amount: float, from_unit: str, to_unit: str) -> float:
+        """Convert currency between different units (gp, sp, cp)."""
+        # Conversion rates
+        rates = {
+            "cp": 0.01,  # 1 cp = 0.01 gp
+            "sp": 0.1,   # 1 sp = 0.1 gp
+            "gp": 1.0,   # 1 gp = 1 gp
+            "pp": 10.0   # 1 pp = 10 gp
+        }
 
-        Args:
-            name: The name of the class (e.g., wizard, fighter)
-        """
-        print(f"Querying class: {name}", file=sys.stderr)
-        try:
-            class_name = name.lower()
-            if not class_name:
-                return "Please provide a class name."
+        # Convert to gp first
+        gp_value = amount * rates.get(from_unit.lower(), 1.0)
 
-            try:
-                with urllib.request.urlopen(f"{API_BASE_URL}/classes/{class_name}") as response:
-                    if response.status == 200:
-                        class_data = json.loads(response.read())
-                        formatted_data = format_class_data(class_data)
-                        return formatted_data
-                    else:
-                        return f"Class '{name}' not found."
-            except urllib.error.HTTPError as e:
-                if e.code == 404:
-                    return f"Class '{name}' not found."
-                return f"Error accessing class information: {str(e)}"
-            except Exception as e:
-                return f"Error: {str(e)}"
-        except Exception as e:
-            print(f"Error in get_class: {e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
-            return f"Error: {str(e)}"
+        # Convert from gp to target unit
+        target_rate = rates.get(to_unit.lower(), 1.0)
+        if target_rate == 0:
+            return 0
 
-    # Define the search_api function
-    async def search_api_handler(endpoint: str, query: str) -> str:
-        """Search the D&D API for specific content.
+        return gp_value / target_rate
 
-        Args:
-            endpoint: The API endpoint to search (e.g., spells, monsters, classes)
-            query: The search term
-        """
-        print(
-            f"Searching API: endpoint={endpoint}, query={query}", file=sys.stderr)
-        try:
-            if not endpoint or not query:
-                return "Please provide both an endpoint and a query."
+    def _get_description(item: Dict[str, Any]) -> str:
+        """Extract description from an item, handling different formats."""
+        desc = item.get("desc", "")
 
-            valid_endpoints = ["monsters", "spells", "classes",
-                               "races", "equipment", "magic-items", "features"]
-            if endpoint not in valid_endpoints:
-                return f"Error: Invalid endpoint. Valid options are: {', '.join(valid_endpoints)}"
+        # Handle list of descriptions
+        if isinstance(desc, list):
+            if desc:
+                return desc[0][:100] + "..." if len(desc[0]) > 100 else desc[0]
+            return "No description available"
 
-            try:
-                search_url = f"{API_BASE_URL}/{endpoint}?name={urllib.parse.quote(query)}"
-                print(f"Searching API with URL: {search_url}", file=sys.stderr)
+        # Handle string description
+        if isinstance(desc, str):
+            return desc[:100] + "..." if len(desc) > 100 else desc
 
-                with urllib.request.urlopen(search_url) as response:
-                    if response.status == 200:
-                        results = json.loads(response.read())
-                        if results.get("count", 0) == 0:
-                            return f"No results found for '{query}' in {endpoint}."
+        return "No description available"
 
-                        results_text = f"Found {results['count']} results for '{query}' in '{endpoint}':\n\n"
-                        for result in results.get("results", []):
-                            results_text += f"- {result.get('name')}\n"
-
-                        return results_text
-            except urllib.error.HTTPError as e:
-                return f"Error searching the D&D API: {str(e)}"
-            except Exception as e:
-                return f"Error: {str(e)}"
-        except Exception as e:
-            print(f"Error in search_api: {e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
-            return f"Error: {str(e)}"
-
-    # Register the tools with FastMCP using the correct pattern
-    app.tool()(query_monster_handler)
-    app.tool()(get_spell_handler)
-    app.tool()(get_class_handler)
-    app.tool()(search_api_handler)
-
-    print("Tools registered successfully", file=sys.stderr)
+    print("D&D API tools registered successfully", file=sys.stderr)
