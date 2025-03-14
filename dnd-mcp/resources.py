@@ -125,10 +125,20 @@ def register_resources(app, cache: APICache):
 
     @app.resource("resource://dnd/categories")
     def get_categories() -> Dict[str, Any]:
-        """List all available D&D 5e API categories.
+        """List all available D&D 5e API categories for browsing the official content.
+
+        This resource provides a comprehensive list of all categories available in the D&D 5e API,
+        such as spells, monsters, equipment, classes, races, and more. Each category entry includes
+        a name, description, and endpoint URL.
+
+        This is typically the first resource to access when exploring the D&D 5e API, as it provides
+        an overview of all available content categories and their endpoints.
+
+        The data is cached to improve performance on subsequent requests.
 
         Returns:
-            A dictionary with category information
+            A dictionary containing all available D&D 5e API categories with descriptions
+            and endpoints, with source attribution to the D&D 5e API.
         """
         logger.debug("Fetching D&D API categories")
 
@@ -173,13 +183,28 @@ def register_resources(app, cache: APICache):
 
     @app.resource("resource://dnd/items/{category}")
     def get_items(category: str) -> Dict[str, Any]:
-        """List items in the specified category.
+        """Retrieve a list of all items available in a specific D&D 5e API category.
+
+        This resource provides access to all items within a specified category, such as all spells,
+        all monsters, all equipment, etc. The response includes basic information about each item
+        (name and index) that can be used to retrieve detailed information via the item details resource.
+
+        Common categories include:
+        - spells: All spells in the D&D 5e ruleset
+        - monsters: All monsters and creatures
+        - equipment: All standard equipment items
+        - magic-items: All magical items and artifacts
+        - classes: All character classes
+        - races: All playable races
+
+        The data is cached to improve performance on subsequent requests.
 
         Args:
-            category: The D&D API category (e.g., 'spells', 'equipment')
+            category: The D&D API category to retrieve items from (e.g., 'spells', 'monsters', 'equipment')
 
         Returns:
-            A dictionary with items in the category
+            A dictionary containing all items in the specified category with basic information,
+            with source attribution to the D&D 5e API.
         """
         logger.debug(f"Fetching items for category: {category}")
 
@@ -227,14 +252,27 @@ def register_resources(app, cache: APICache):
 
     @app.resource("resource://dnd/item/{category}/{index}")
     def get_item(category: str, index: str) -> Dict[str, Any]:
-        """Get details for a specific item.
+        """Retrieve detailed information about a specific D&D 5e item by its category and index.
+
+        This resource provides comprehensive details about a specific D&D item, including all of its
+        properties, descriptions, mechanics, and related information. The response structure varies
+        based on the category, as different types of items have different properties:
+
+        - Spells: Includes level, casting time, range, components, duration, description, etc.
+        - Monsters: Includes challenge rating, hit points, armor class, abilities, actions, etc.
+        - Equipment: Includes cost, weight, properties, damage (for weapons), etc.
+        - Classes: Includes proficiencies, spellcasting abilities, class features, etc.
+        - Races: Includes ability bonuses, traits, languages, etc.
+
+        The data is cached to improve performance on subsequent requests.
 
         Args:
-            category: The D&D API category (e.g., 'spells', 'equipment')
-            index: The item's index identifier
+            category: The D&D API category the item belongs to (e.g., 'spells', 'monsters', 'equipment')
+            index: The unique identifier for the specific item (e.g., 'fireball', 'adult-red-dragon')
 
         Returns:
-            A dictionary with the item details
+            A dictionary containing detailed information about the requested item,
+            with source attribution to the D&D 5e API.
         """
         logger.debug(f"Fetching item details: {category}/{index}")
 
@@ -274,14 +312,29 @@ def register_resources(app, cache: APICache):
 
     @app.resource("resource://dnd/search/{category}/{query}")
     def search_category(category: str, query: str) -> Dict[str, Any]:
-        """Search for items in a category by name.
+        """Search for D&D 5e items within a specific category that match the provided query.
+
+        This resource allows for targeted searching within a specific category of D&D content,
+        such as finding spells that match a name pattern, monsters with specific terms in their
+        name, or equipment items with particular keywords.
+
+        The search is performed on item names and indexes, with partial matching supported.
+        Results are returned in order of relevance, with exact matches prioritized.
+
+        For broader searches across all categories, use the search_all_categories tool instead.
+
+        Examples:
+        - search/spells/fire - finds all spells with "fire" in their name
+        - search/monsters/dragon - finds all monsters with "dragon" in their name
+        - search/equipment/sword - finds all equipment items with "sword" in their name
 
         Args:
-            category: The D&D API category to search in
-            query: The search term to look for
+            category: The D&D API category to search within (e.g., 'spells', 'monsters', 'equipment')
+            query: The search term to look for in item names (minimum 2 characters)
 
         Returns:
-            A dictionary with matching items
+            A dictionary containing items from the specified category that match the search query,
+            with source attribution to the D&D 5e API.
         """
         logger.debug(f"Searching in {category} for: {query}")
 
@@ -310,10 +363,23 @@ def register_resources(app, cache: APICache):
 
     @app.resource("resource://dnd/api_status")
     def check_api_status() -> Dict[str, Any]:
-        """Check the status of the D&D 5e API connection.
+        """Check the current status and health of the D&D 5e API connection.
+
+        This resource provides diagnostic information about the D&D 5e API, including:
+        - Whether the API is currently available and responding
+        - The response time of the API
+        - The HTTP status code returned by the API
+        - A list of available endpoints/categories
+        - Any error messages if the API is not functioning correctly
+
+        This is useful for troubleshooting when other D&D resources or tools are not working
+        as expected, or when you want to verify the API's availability before making requests.
+
+        No parameters are required for this resource.
 
         Returns:
-            A dictionary with API status information
+            A dictionary containing comprehensive API status information, including availability,
+            response time, available endpoints, and any error messages if applicable.
         """
         logger.debug("Checking D&D 5e API status")
 

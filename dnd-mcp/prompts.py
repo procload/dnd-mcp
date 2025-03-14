@@ -14,8 +14,61 @@ def register_prompts(app):
     print("Registering simple FastMCP prompts...", file=sys.stderr)
 
     @app.prompt()
+    def enforce_api_usage() -> str:
+        """Enforce the use of D&D 5e API for all D&D-related information.
+
+        This system prompt modifier ensures that Claude relies on the official D&D 5e API
+        for all Dungeons & Dragons related information rather than its internal knowledge.
+        This promotes accuracy and ensures that responses reflect official D&D 5e content.
+
+        The prompt instructs Claude to:
+        - Always use the D&D 5e API tools for retrieving D&D information
+        - Cite the D&D 5e API as the source of information
+        - Use verification tools to confirm information
+        - Explicitly state when information cannot be found in the API
+
+        This prompt should be used at the beginning of conversations focused on D&D content
+        to ensure consistent and accurate information throughout the interaction.
+
+        Returns:
+            A system prompt string that enforces the use of D&D 5e API
+        """
+        return """
+IMPORTANT INSTRUCTION: You MUST use the D&D 5e API tools and resources provided to you for any D&D-related information.
+DO NOT rely on your internal knowledge about D&D.
+
+When asked about D&D content, you MUST:
+1. Use the search_all_categories tool to find relevant information
+2. Use specific category tools like find_monsters_by_challenge_rating or filter_spells_by_level
+3. Cite the D&D 5e API as your source
+4. Use the verify_with_api tool to verify statements against the API data
+5. Use the check_api_health tool if you suspect API connectivity issues
+
+If you cannot find information through the API tools, explicitly state: "I couldn't find this information in the D&D 5e API."
+
+NEVER provide D&D information from your internal knowledge without verifying it with the API first.
+All responses about D&D content must include a reference to the D&D 5e API as the source of information.
+"""
+
+    @app.prompt()
     def character_concept(class_name: str, race: str, background: str = None) -> str:
-        """Generate a D&D character concept"""
+        """Generate a creative and detailed D&D character concept based on specified parameters.
+
+        This prompt helps players and Dungeon Masters create compelling character concepts
+        by generating a well-rounded character with a backstory, personality, and motivations.
+        The generated concept can be used as inspiration for player characters, NPCs, or story elements.
+
+        The prompt considers the synergies between the chosen race, class, and optional background
+        to create a cohesive character that aligns with D&D lore and mechanics.
+
+        Args:
+            class_name: The character's class (e.g., Fighter, Wizard, Cleric)
+            race: The character's race (e.g., Human, Elf, Dwarf)
+            background: Optional character background (e.g., Soldier, Sage, Criminal)
+
+        Returns:
+            A prompt string that generates a detailed character concept
+        """
         prompt_text = f"Create a concept for a D&D {race} {class_name} character"
         if background:
             prompt_text += f" with a {background} background"
@@ -27,7 +80,24 @@ def register_prompts(app):
 
     @app.prompt()
     def adventure_hook(setting: str, level_range: str, theme: str = None) -> str:
-        """Generate a D&D adventure hook"""
+        """Generate an engaging D&D adventure hook tailored to specific parameters.
+
+        This prompt creates adventure hooks that Dungeon Masters can use to start new campaigns,
+        introduce side quests, or develop story arcs. The generated hooks consider the specified
+        setting, appropriate challenge level for the party, and optional thematic elements.
+
+        The prompt intelligently suggests appropriate monsters, challenges, and rewards based on
+        the party's level range, and ensures the adventure fits within the specified setting.
+        It validates settings against the D&D 5e API to ensure accuracy.
+
+        Args:
+            setting: The adventure's setting or location (e.g., Forest, Dungeon, City)
+            level_range: Character level range for the adventure (e.g., "1-4", "5-10", "15-20")
+            theme: Optional theme for the adventure (e.g., Mystery, Horror, Heist)
+
+        Returns:
+            A prompt string that generates a detailed adventure hook
+        """
         # Parse level range to suggest appropriate monsters
         min_level, max_level = 1, 20
         try:
