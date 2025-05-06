@@ -31,7 +31,7 @@ For a detailed explanation of MCP and how this project implements it, check out 
 1. Clone this repository:
 
    ```
-   git clone https://github.com/yourusername/dnd-knowledge-navigator.git
+   git clone https://github.com/procload/dnd-mcp.git
    cd dnd-knowledge-navigator
    ```
 
