@@ -72,6 +72,58 @@ For a detailed explanation of MCP and how this project implements it, check out 
    uv run python dnd_mcp_server.py
    ```
 
+## Deploy As Remote MCP (Cloud)
+
+This project can run as a remote MCP server over HTTP using FastMCP's
+`streamable-http` transport.
+
+### Runtime environment variables
+
+- `MCP_TRANSPORT`: `stdio` (default), `sse`, or `streamable-http`
+- `HOST`: bind host (use `0.0.0.0` in cloud)
+- `PORT`: bind port (cloud platforms typically inject this)
+
+Recommended cloud settings:
+
+```
+MCP_TRANSPORT=streamable-http
+HOST=0.0.0.0
+PORT=8000
+```
+
+### Generic cloud deployment steps
+
+1. Create a new web service from this repository.
+2. Build command:
+
+   ```
+   uv pip install -r requirements.txt
+   ```
+
+3. Start command:
+
+   ```
+   uv run python dnd_mcp_server.py
+   ```
+
+4. Set environment variables from the section above.
+5. Deploy and expose HTTPS.
+
+After deployment, your remote MCP endpoint is:
+
+```
+https://<your-domain>/mcp
+```
+
+If your MCP client only supports SSE, you can alternatively deploy with
+`MCP_TRANSPORT=sse` and use:
+
+```
+https://<your-domain>/sse
+```
+
+Use that URL in MCP clients that support remote/HTTP servers.
+
 ## MCP Tool Usage
 
 When connected to an AI assistant, the following tools are available:

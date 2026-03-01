@@ -10,6 +10,7 @@ import logging
 import sys
 import traceback
 import os
+from typing import Literal
 from mcp.server.fastmcp import FastMCP
 
 # Import from our reorganized structure
@@ -28,35 +29,68 @@ log_file = os.path.join(log_dir, "dnd_mcp_server.log")
 # Configure logging with both console and file output
 logging.basicConfig(
     level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_file),
-        logging.StreamHandler(sys.stderr)
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler(log_file), logging.StreamHandler(sys.stderr)],
 )
 logger = logging.getLogger(__name__)
 
 
+TransportType = Literal["stdio", "sse", "streamable-http"]
+
+
+def _get_runtime_config() -> tuple[str, int, TransportType]:
+    """Read runtime configuration from environment variables.
+
+    Returns:
+        Tuple of host, port, and transport mode.
+    """
+    host = os.getenv("HOST", "127.0.0.1")
+
+    port_str = os.getenv("PORT", "8000")
+    try:
+        port = int(port_str)
+    except ValueError:
+        logger.warning("Invalid PORT '%s'. Falling back to 8000.", port_str)
+        port = 8000
+
+    transport = os.getenv("MCP_TRANSPORT", "stdio").strip().lower()
+    valid_transports: set[str] = {"stdio", "sse", "streamable-http"}
+    if transport not in valid_transports:
+        logger.warning(
+            "Invalid MCP_TRANSPORT '%s'. Falling back to 'stdio'.",
+            transport,
+        )
+        transport = "stdio"
+
+    return host, port, transport  # type: ignore[return-value]
+
+
 def main():
     """Main entry point for the D&D Knowledge Navigator server."""
+    host, port, transport = _get_runtime_config()
+
     # Add debug output
     print("Starting D&D Knowledge Navigator with FastMCP...", file=sys.stderr)
     print(f"Python version: {sys.version}", file=sys.stderr)
     print(f"Current directory: {os.getcwd()}", file=sys.stderr)
-    print(
-        f"Logs will be saved to: {os.path.abspath(log_file)}", file=sys.stderr)
+    print(f"Logs will be saved to: {os.path.abspath(log_file)}", file=sys.stderr)
+    print(f"Transport: {transport}", file=sys.stderr)
+    print(f"Host: {host}", file=sys.stderr)
+    print(f"Port: {port}", file=sys.stderr)
 
     try:
         # Create FastMCP server
         print("Creating FastMCP server...", file=sys.stderr)
-        app = FastMCP("dnd-knowledge-navigator")
+        app = FastMCP("dnd-knowledge-navigator", host=host, port=port)
         print("FastMCP server created successfully", file=sys.stderr)
 
         # Create shared cache with 24-hour TTL and persistence
         cache_dir = os.path.join(os.path.dirname(__file__), "cache")
         cache = APICache(ttl_hours=24, persistent=True, cache_dir=cache_dir)
         print(
-            f"API cache initialized (24-hour TTL, persistent cache in {cache_dir})", file=sys.stderr)
+            f"API cache initialized (24-hour TTL, persistent cache in {cache_dir})",
+            file=sys.stderr,
+        )
 
         # Register components
         resources.register_resources(app, cache)
@@ -65,7 +99,7 @@ def main():
 
         # Run the app
         print("Running FastMCP app...", file=sys.stderr)
-        app.run()
+        app.run(transport=transport)  # type: ignore[arg-type]
         print("App run completed", file=sys.stderr)
         return 0
     except Exception as e:

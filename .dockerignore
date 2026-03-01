@@ -1,0 +1,17 @@
+.git
+.gitignore
+.venv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+cache/
+logs/
+build/
+Archive/
+dnd_mcp.egg-info/
+uv.lock
+docs/
+tests/
+mcp.md
